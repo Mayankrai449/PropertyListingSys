@@ -66,23 +66,38 @@ func (rc *RecommendationController) CreateRecommendation(c echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create recommendation"})
 	}
+
+	cacheKey := "recommendations:" + recipient.ID.Hex()
+	utils.RedisClient.Del(context.Background(), cacheKey)
+
 	return c.JSON(http.StatusCreated, recommendation)
 }
 
 func (rc *RecommendationController) GetReceivedRecommendations(c echo.Context) error {
 	userID := c.Get("user_id").(primitive.ObjectID)
-	cursor, err := rc.collection.Find(context.Background(), bson.M{"recipientId": userID})
+
+	var recommendations []models.Recommendation
+	cacheKey := "recommendations:" + userID.Hex()
+	ctx := context.Background()
+	if hit, err := utils.GetCached(ctx, cacheKey, &recommendations); hit && err == nil {
+		return c.JSON(http.StatusOK, recommendations)
+	}
+
+	cursor, err := rc.collection.Find(ctx, bson.M{"recipientId": userID})
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch recommendations"})
 	}
-	defer cursor.Close(context.Background())
-	var recommendations []models.Recommendation
-	for cursor.Next(context.Background()) {
+	defer cursor.Close(ctx)
+	for cursor.Next(ctx) {
 		var rec models.Recommendation
 		if err := cursor.Decode(&rec); err != nil {
 			continue
 		}
 		recommendations = append(recommendations, rec)
 	}
+
+	if err := utils.SetCached(ctx, cacheKey, recommendations, 30*time.Second); err != nil {
+	}
+
 	return c.JSON(http.StatusOK, recommendations)
 }

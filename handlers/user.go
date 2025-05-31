@@ -71,6 +71,9 @@ func (uc *UserController) Register(c echo.Context) error {
 		})
 	}
 
+	ctx := context.Background()
+	utils.RedisClient.Del(ctx, "users:all")
+
 	token, err := utils.GenerateJWT(user.ID, user.Email, user.Role)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
@@ -134,11 +137,21 @@ func (uc *UserController) GetProfile(c echo.Context) error {
 	userID := c.Get("user_id").(primitive.ObjectID)
 
 	var user models.User
-	err := uc.collection.FindOne(context.Background(), bson.M{"_id": userID}).Decode(&user)
+	cacheKey := "user:profile:" + userID.Hex()
+	ctx := context.Background()
+	if hit, err := utils.GetCached(ctx, cacheKey, &user); hit && err == nil {
+		user.Password = ""
+		return c.JSON(http.StatusOK, user)
+	}
+
+	err := uc.collection.FindOne(ctx, bson.M{"_id": userID}).Decode(&user)
 	if err != nil {
 		return c.JSON(http.StatusNotFound, map[string]string{
 			"error": "User not found",
 		})
+	}
+
+	if err := utils.SetCached(ctx, cacheKey, user, 30*time.Second); err != nil {
 	}
 
 	user.Password = ""
@@ -186,6 +199,11 @@ func (uc *UserController) UpdateProfile(c echo.Context) error {
 		})
 	}
 
+	ctx := context.Background()
+	cacheKeyProfile := "user:profile:" + userID.Hex()
+	cacheKeyEmail := "user:email:" + user.Email
+	utils.RedisClient.Del(ctx, cacheKeyProfile, cacheKeyEmail, "users:all")
+
 	user.Password = ""
 
 	return c.JSON(http.StatusOK, user)
@@ -194,12 +212,25 @@ func (uc *UserController) UpdateProfile(c echo.Context) error {
 func (uc *UserController) DeleteAccount(c echo.Context) error {
 	userID := c.Get("user_id").(primitive.ObjectID)
 
-	_, err := uc.collection.DeleteOne(context.Background(), bson.M{"_id": userID})
+	var user models.User
+	err := uc.collection.FindOne(context.Background(), bson.M{"_id": userID}).Decode(&user)
+	if err != nil {
+		return c.JSON(http.StatusNotFound, map[string]string{
+			"error": "User not found",
+		})
+	}
+
+	_, err = uc.collection.DeleteOne(context.Background(), bson.M{"_id": userID})
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to delete user",
 		})
 	}
+
+	ctx := context.Background()
+	cacheKeyProfile := "user:profile:" + userID.Hex()
+	cacheKeyEmail := "user:email:" + user.Email
+	utils.RedisClient.Del(ctx, cacheKeyProfile, cacheKeyEmail, "users:all")
 
 	return c.JSON(http.StatusOK, map[string]string{
 		"message": "Account deleted successfully",
@@ -214,22 +245,34 @@ func (uc *UserController) GetAllUsers(c echo.Context) error {
 		})
 	}
 
-	cursor, err := uc.collection.Find(context.Background(), bson.M{})
+	var users []models.User
+	cacheKey := "users:all"
+	ctx := context.Background()
+	if hit, err := utils.GetCached(ctx, cacheKey, &users); hit && err == nil {
+		for i := range users {
+			users[i].Password = ""
+		}
+		return c.JSON(http.StatusOK, users)
+	}
+
+	cursor, err := uc.collection.Find(ctx, bson.M{})
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to fetch users",
 		})
 	}
-	defer cursor.Close(context.Background())
+	defer cursor.Close(ctx)
 
-	var users []models.User
-	for cursor.Next(context.Background()) {
+	for cursor.Next(ctx) {
 		var user models.User
 		if err := cursor.Decode(&user); err != nil {
 			continue
 		}
 		user.Password = ""
 		users = append(users, user)
+	}
+
+	if err := utils.SetCached(ctx, cacheKey, users, 30*time.Second); err != nil {
 	}
 
 	return c.JSON(http.StatusOK, users)
@@ -240,13 +283,24 @@ func (uc *UserController) SearchUserByEmail(c echo.Context) error {
 	if email == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Email is required"})
 	}
+
 	var user models.User
-	err := uc.collection.FindOne(context.Background(), bson.M{"email": email}).Decode(&user)
+	cacheKey := "user:email:" + email
+	ctx := context.Background()
+	if hit, err := utils.GetCached(ctx, cacheKey, &user); hit && err == nil {
+		return c.JSON(http.StatusOK, map[string]string{"id": user.ID.Hex(), "name": user.Name})
+	}
+
+	err := uc.collection.FindOne(ctx, bson.M{"email": email}).Decode(&user)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
 		}
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to search user"})
 	}
+
+	if err := utils.SetCached(ctx, cacheKey, user, 30*time.Second); err != nil {
+	}
+
 	return c.JSON(http.StatusOK, map[string]string{"id": user.ID.Hex(), "name": user.Name})
 }

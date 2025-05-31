@@ -31,7 +31,7 @@ func RegisterRoutes(e *echo.Echo) {
 
 	properties := api.Group("/properties")
 	properties.POST("", propertyController.CreateProperty)
-	properties.PUT("/:id", propertyController.UpdateProperty)
+	properties.PATCH("/:id", propertyController.PatchProperty)
 	properties.DELETE("/:id", propertyController.DeleteProperty)
 	e.GET("/properties", propertyController.ListProperties)
 	e.GET("/properties/:id", propertyController.GetProperty)

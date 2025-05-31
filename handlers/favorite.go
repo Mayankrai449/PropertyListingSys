@@ -52,24 +52,39 @@ func (fc *FavoriteController) CreateFavorite(c echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to favorite property"})
 	}
+
+	cacheKey := "favorites:" + userID.Hex()
+	utils.RedisClient.Del(context.Background(), cacheKey)
+
 	return c.JSON(http.StatusCreated, favorite)
 }
 
 func (fc *FavoriteController) GetFavorites(c echo.Context) error {
 	userID := c.Get("user_id").(primitive.ObjectID)
-	cursor, err := fc.collection.Find(context.Background(), bson.M{"userId": userID})
+
+	var favorites []models.Favorite
+	cacheKey := "favorites:" + userID.Hex()
+	ctx := context.Background()
+	if hit, err := utils.GetCached(ctx, cacheKey, &favorites); hit && err == nil {
+		return c.JSON(http.StatusOK, favorites)
+	}
+
+	cursor, err := fc.collection.Find(ctx, bson.M{"userId": userID})
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch favorites"})
 	}
-	defer cursor.Close(context.Background())
-	var favorites []models.Favorite
-	for cursor.Next(context.Background()) {
+	defer cursor.Close(ctx)
+	for cursor.Next(ctx) {
 		var favorite models.Favorite
 		if err := cursor.Decode(&favorite); err != nil {
 			continue
 		}
 		favorites = append(favorites, favorite)
 	}
+
+	if err := utils.SetCached(ctx, cacheKey, favorites, 30*time.Second); err != nil {
+	}
+
 	return c.JSON(http.StatusOK, favorites)
 }
 
@@ -83,5 +98,9 @@ func (fc *FavoriteController) DeleteFavorite(c echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to remove favorite"})
 	}
+
+	cacheKey := "favorites:" + userID.Hex()
+	utils.RedisClient.Del(context.Background(), cacheKey)
+
 	return c.JSON(http.StatusOK, map[string]string{"message": "Favorite removed successfully"})
 }
