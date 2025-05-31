@@ -17,10 +17,8 @@ func main() {
 		log.Println("No .env file found, using system environment variables")
 	}
 
-	// Initialize MongoDB
 	config.ConnectDB()
 
-	// Initialize Redis
 	utils.InitRedis()
 
 	e := echo.New()
