@@ -234,3 +234,19 @@ func (uc *UserController) GetAllUsers(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, users)
 }
+
+func (uc *UserController) SearchUserByEmail(c echo.Context) error {
+	email := c.QueryParam("email")
+	if email == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Email is required"})
+	}
+	var user models.User
+	err := uc.collection.FindOne(context.Background(), bson.M{"email": email}).Decode(&user)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
+		}
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to search user"})
+	}
+	return c.JSON(http.StatusOK, map[string]string{"id": user.ID.Hex(), "name": user.Name})
+}
